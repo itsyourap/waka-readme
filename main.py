@@ -148,7 +148,7 @@ class WakaInput:
     show_total_time: str | bool = os.getenv("INPUT_SHOW_TOTAL") or False
     show_masked_time: str | bool = os.getenv("INPUT_SHOW_MASKED_TIME") or False
     language_count: str | int = os.getenv("INPUT_LANG_COUNT") or 5
-    stop_at_other: str | bool = os.getenv("INPUT_STOP_AT_OTHER") or False
+    ignore_other_language: str | bool = os.getenv("INPUT_IGNORE_OTHER_LANGUAGE") or False
     ignored_languages: str = os.getenv("INPUT_IGNORED_LANGUAGES", "")
     # # optional meta
     target_branch: str = os.getenv("INPUT_TARGET_BRANCH", "NOT_SET")
@@ -175,7 +175,7 @@ class WakaInput:
             self.show_time = strtobool(self.show_time)
             self.show_total_time = strtobool(self.show_total_time)
             self.show_masked_time = strtobool(self.show_masked_time)
-            self.stop_at_other = strtobool(self.stop_at_other)
+            self.ignore_other_language = strtobool(self.ignore_other_language)
         except (ValueError, AttributeError) as err:
             logger.error(err)
             return False
@@ -214,12 +214,12 @@ class WakaInput:
             self.language_count = 5
 
         for option in (
-            "target_branch",
-            "target_path",
-            "committer_name",
-            "committer_email",
-            "author_name",
-            "author_email",
+                "target_branch",
+                "target_path",
+                "committer_name",
+                "committer_email",
+                "author_name",
+                "author_email",
         ):
             if not getattr(self, option):
                 logger.warning(f"Improper '{option}' configuration")
@@ -300,14 +300,14 @@ def prep_content(stats: dict[str, Any], /):
 
     # make byline
     if wk_i.show_masked_time and (
-        total_time := stats.get("human_readable_total_including_other_language")
+            total_time := stats.get("human_readable_total_including_other_language")
     ):
         # overrides "human_readable_total"
         contents += f"Total Time: {total_time}\n\n"
     elif wk_i.show_total_time and (total_time := stats.get("human_readable_total")):
         contents += f"Total Time: {total_time}\n\n"
 
-    lang_info: list[dict[str, int | float | str]] | None = []
+    lang_info: list[dict[str, int | float | str]] | None
 
     # Check if any language data exists
     if not (lang_info := stats.get("languages")):
@@ -321,32 +321,38 @@ def prep_content(stats: dict[str, Any], /):
         max((str(lng["name"]) for lng in lang_info), key=len)
         # and then do not for get to set `pad_len` to say 13 :)
     )
-    language_count, stop_at_other = int(wk_i.language_count), bool(wk_i.stop_at_other)
-    if language_count == 0 and not wk_i.stop_at_other:
+    language_count, ignore_other_language = int(wk_i.language_count), bool(wk_i.ignore_other_language)
+    if language_count == 0 and not wk_i.ignore_other_language:
         logger.debug(
             "Set INPUT_LANG_COUNT to -1 to retrieve all language"
             + " or specify a positive number (ie. above 0)"
         )
         return contents.rstrip("\n")
 
+    total_time_including_other: float = float(stats.get("total_seconds_including_other_language")) / 3600
+    total_time_excluding_other: float = float(stats.get("total_seconds")) / 3600
+
     ignored_languages = _extract_ignored_languages()
     for idx, lang in enumerate(lang_info):
         lang_name = str(lang["name"])
         if ignored_languages and lang_name in ignored_languages:
             continue
+        if ignore_other_language and (lang_name == "Other"):
+            continue
         lang_time = str(lang["text"]) if wk_i.show_time else ""
         lang_ratio = float(lang["percent"])
+        if ignore_other_language:
+            lang_actual_time = (total_time_including_other * lang_ratio) / 100
+            lang_ratio = (lang_actual_time / total_time_excluding_other) * 100
         lang_bar = make_graph(wk_i.block_style, lang_ratio, wk_i.graph_length, lang_name)
         contents += (
-            f"{lang_name.ljust(pad_len)}   "
-            + f"{lang_time: <16}{lang_bar}   "
-            + f"{lang_ratio:.2f}".zfill(5)
-            + " %\n"
+                f"{lang_name.ljust(pad_len)}   "
+                + f"{lang_time: <16}{lang_bar}   "
+                + f"{lang_ratio:.2f}".zfill(5)
+                + " %\n"
         )
         if language_count == -1:
             continue
-        if stop_at_other and (lang_name == "Other"):
-            break
         if idx + 1 >= language_count > 0:  # idx starts at 0
             break
 
@@ -367,14 +373,14 @@ def fetch_stats():
         resp_message, fake_ua = "", cryptogenic.choice([str(fake.user_agent()) for _ in range(5)])
         # making a request
         if (
-            resp := rq_get(
-                url=f"{str(wk_i.api_base_url).rstrip('/')}/v1/users/current/stats/{wk_i.time_range}",
-                headers={
-                    "Authorization": f"Basic {encoded_key}",
-                    "User-Agent": fake_ua,
-                },
-                timeout=(30.0 * (5 - attempts)),
-            )
+                resp := rq_get(
+                    url=f"{str(wk_i.api_base_url).rstrip('/')}/v1/users/current/stats/{wk_i.time_range}",
+                    headers={
+                        "Authorization": f"Basic {encoded_key}",
+                        "User-Agent": fake_ua,
+                    },
+                    timeout=(30.0 * (5 - attempts)),
+                )
         ).status_code != 200:
             resp_message += f" • {conn_info}" if (conn_info := resp.json().get("message")) else ""
         logger.debug(
@@ -383,7 +389,7 @@ def fetch_stats():
         if resp.status_code == 200 and (statistic := resp.json()):
             logger.debug("Fetched WakaTime statistics")
             break
-        logger.debug(f"Retrying in {30 * (5 - attempts )}s ...")
+        logger.debug(f"Retrying in {30 * (5 - attempts)}s ...")
         sleep(30 * (5 - attempts))
         attempts -= 1
 
