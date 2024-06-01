@@ -332,7 +332,9 @@ def prep_content(stats: dict[str, Any], /):
     total_time_including_other: float = float(stats.get("total_seconds_including_other_language")) / 3600
     total_time_excluding_other: float = float(stats.get("total_seconds")) / 3600
 
-    ignored_languages = _extract_ignored_languages()
+    temp = _extract_ignored_languages()
+    ignored_languages = list(temp) if temp else False
+
     for idx, lang in enumerate(lang_info):
         lang_name = str(lang["name"])
         if ignored_languages and lang_name in ignored_languages:
